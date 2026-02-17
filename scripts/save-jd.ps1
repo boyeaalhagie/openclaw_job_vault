@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 # -------------------------
 $Profile     = "openclaw"
 $GatewayPort = 18789
-$StorageRoot = "C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\OpenClaw Job Vault"
+$StorageRoot = "add your storage root here (for example: C:\Users\boyea\)"
 
 # -------------------------
 # Auto-start gateway + browser if not running
