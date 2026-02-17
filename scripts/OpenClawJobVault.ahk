@@ -18,6 +18,6 @@ if !FileExist(shortcutPath) {
 
 ; --- Hotkey: Ctrl+Alt+J ---
 ^!j:: {
-  ps1 := "C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault\scripts\save-jd.ps1"
+  ps1 := A_ScriptDir "\save-jd.ps1"
   Run 'powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "' ps1 '"'
 }

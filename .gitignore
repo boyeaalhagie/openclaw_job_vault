@@ -1,2 +1,4 @@
+.env
 captures/
 **/cli.log
+*.csv

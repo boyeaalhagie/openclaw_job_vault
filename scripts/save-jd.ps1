@@ -1,17 +1,35 @@
-# OpenClaw Job Vault (Windows)
-# Press Ctrl+Alt+J → auto-starts gateway/browser if needed → captures the active tab → saves locally
+# OpenClaw Job Vault - Agent Launcher
+# Ctrl+Alt+J -> capture page -> send to AI agent for intelligent extraction
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 # -------------------------
-# Config — change $StorageRoot to wherever you want captures saved
+# Config - edit these paths to match your setup
 # -------------------------
 $Profile     = "openclaw"
 $GatewayPort = 18789
-$StorageRoot = "add your storage root here (for example: C:\Users\boyea\)"
+
+# Auto-detect project root (parent of scripts/)
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+if (-not $ProjectRoot) { $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path) }
+
+# Storage folder for captures + CSV (change this to wherever you want)
+$StorageRoot = Join-Path ([Environment]::GetFolderPath("Desktop")) "OpenClaw Job Vault"
 
 # -------------------------
-# Auto-start gateway + browser if not running
+# Load .env
+# -------------------------
+$envFile = Join-Path $ProjectRoot ".env"
+if (Test-Path $envFile) {
+  foreach ($line in (Get-Content $envFile)) {
+    if ($line -match '^([^#]\w+)=(.+)$') {
+      Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+    }
+  }
+}
+
+# -------------------------
+# Ensure gateway + browser are running
 # -------------------------
 function Ensure-Gateway() {
   $listening = netstat -an 2>$null | Select-String "127.0.0.1:$GatewayPort.*LISTENING"
@@ -49,7 +67,6 @@ function Safe-Slug([string]$s) {
 }
 
 function Get-ActiveTab() {
-  # Get all tabs from OpenClaw
   try {
     $raw = & openclaw browser --browser-profile $Profile tabs --json 2>$null
     if (-not $raw) { return $null }
@@ -59,23 +76,21 @@ function Get-ActiveTab() {
     if ($pages.Count -eq 0) { return $null }
   } catch { return $null }
 
-  # Read Chrome window title to find which tab is actually active
   $chromeProc = Get-Process chrome -ErrorAction SilentlyContinue |
     Where-Object { $_.MainWindowTitle -ne "" } | Select-Object -First 1
 
   if ($chromeProc) {
-    $winTitle = $chromeProc.MainWindowTitle -replace '\s*[-–]\s*Google Chrome$', ''
+    $winTitle = $chromeProc.MainWindowTitle -replace '\s*[-\u2013]\s*Google Chrome$', ''
     foreach ($p in $pages) {
       if ($p.title -eq $winTitle) { return $p }
     }
   }
 
-  # Fallback: return the last page tab
   return $pages[-1]
 }
 
 # -------------------------
-# Identify the active tab
+# Identify active tab
 # -------------------------
 $tab = Get-ActiveTab
 if (-not $tab) {
@@ -88,7 +103,7 @@ $url      = $tab.url
 $title    = if ($tab.title) { $tab.title } else { "Untitled" }
 
 # -------------------------
-# Create bundle folder directly in StorageRoot
+# Create bundle folder + capture
 # -------------------------
 $stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
 $slug  = Safe-Slug $title
@@ -98,60 +113,95 @@ New-Item -ItemType Directory -Force -Path $StorageRoot | Out-Null
 $bundleDir = Join-Path $StorageRoot $bundleDirName
 New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
 
-$logPath = Join-Path $bundleDir "cli.log"
-"[$(Get-Date -Format o)] Save JD start" | Out-File -Encoding utf8 $logPath
-"Title: $title" | Out-File -Encoding utf8 -Append $logPath
-"URL: $url" | Out-File -Encoding utf8 -Append $logPath
-"TargetId: $targetId" | Out-File -Encoding utf8 -Append $logPath
-
 # Save URL
 $url | Out-File -Encoding utf8 (Join-Path $bundleDir "page_url.txt")
 
-# Snapshot (target the specific tab by ID)
+# Snapshot
+$snapshotPath = Join-Path $bundleDir "snapshot.txt"
 try {
   $snapArgs = @("browser","--browser-profile",$Profile,"snapshot","--format","ai","--target-id",$targetId)
   $snapOut = & openclaw @snapArgs 2>&1
-  $snapOut | Out-File -Encoding utf8 (Join-Path $bundleDir "snapshot.txt")
-  "Snapshot: OK" | Out-File -Encoding utf8 -Append $logPath
-} catch {
-  "Snapshot: FAIL - $($_.Exception.Message)" | Out-File -Encoding utf8 -Append $logPath
-}
+  $snapOut | Out-File -Encoding utf8 $snapshotPath
+} catch {}
 
-# PDF (target the specific tab by ID)
-$pdfFinalPath = Join-Path $bundleDir "job.pdf"
+# PDF
 try {
   $pdfArgs = @("browser","--browser-profile",$Profile,"pdf","--target-id",$targetId)
   $pdfOut = & openclaw @pdfArgs 2>&1
-  $pdfOut | Out-File -Encoding utf8 -Append $logPath
-
   $m = [regex]::Match($pdfOut, "PDF:(.+)$", "Multiline")
   if ($m.Success) {
     $pdfTempPath = $m.Groups[1].Value.Trim()
     if (Test-Path $pdfTempPath) {
-      Copy-Item $pdfTempPath $pdfFinalPath -Force
-      "PDF: OK ($pdfTempPath)" | Out-File -Encoding utf8 -Append $logPath
-    } else {
-      "PDF: FAIL - temp path not found: $pdfTempPath" | Out-File -Encoding utf8 -Append $logPath
+      Copy-Item $pdfTempPath (Join-Path $bundleDir "job.pdf") -Force
     }
-  } else {
-    "PDF: FAIL - could not parse PDF path from output" | Out-File -Encoding utf8 -Append $logPath
+  }
+} catch {}
+
+Write-Host "Captured: $title" -ForegroundColor Cyan
+Write-Host "Agent is extracting job details..." -ForegroundColor Cyan
+
+# -------------------------
+# Send to OpenClaw agent for intelligent extraction
+# -------------------------
+$csvPath = Join-Path $StorageRoot "jobs.csv"
+$metaPath = Join-Path $bundleDir "meta.json"
+
+$msg = "Read the file at $snapshotPath. Extract: job_title, company, description (2-3 sentences), requirements (comma-separated), salary (or Not listed), location. Use write tool to create $metaPath with JSON: saved_at ($stamp), title (<job_title> at <company>), url ($url), job_title, company, description, requirements, salary, location. Reply with the job title and company."
+
+$sid = [guid]::NewGuid().ToString()
+
+try {
+  $agentArgs = @("agent", "--agent", "main", "--local", "--session-id", $sid, "--message", $msg, "--json", "--timeout", "180")
+  $agentRaw = & openclaw @agentArgs 2>$null
+  $agentText = ($agentRaw | Out-String).Trim()
+
+  if ($agentText -match '(?s)(\{.*\})') {
+    $parsed = $matches[1] | ConvertFrom-Json
+    if ($parsed.payloads -and $parsed.payloads.Count -gt 0) {
+      $reply = $parsed.payloads[0].text
+      Write-Host ""
+      Write-Host $reply -ForegroundColor Green
+      Write-Host ""
+    }
   }
 } catch {
-  "PDF: FAIL - $($_.Exception.Message)" | Out-File -Encoding utf8 -Append $logPath
+  Write-Host "Agent error: $($_.Exception.Message)" -ForegroundColor Red
 }
 
-# Metadata
-$meta = @{
-  saved_at  = (Get-Date).ToString("o")
-  profile   = $Profile
-  title     = $title
-  url       = $url
-  target_id = $targetId
-}
-$meta | ConvertTo-Json -Depth 6 | Out-File -Encoding utf8 (Join-Path $bundleDir "meta.json")
-"Meta: OK" | Out-File -Encoding utf8 -Append $logPath
+# -------------------------
+# Build CSV row from agent's meta.json output
+# -------------------------
+if (Test-Path $metaPath) {
+  try {
+    $meta = Get-Content $metaPath -Raw | ConvertFrom-Json
 
-Write-Host ""
-Write-Host "Saved: $title" -ForegroundColor Green
-Write-Host "  -> $bundleDir" -ForegroundColor Gray
-Write-Host ""
+    $jobTitle     = if ($meta.job_title)    { $meta.job_title }    else { "" }
+    $company      = if ($meta.company)      { $meta.company }      else { "" }
+    $description  = if ($meta.description)  { $meta.description }  else { "" }
+    $requirements = if ($meta.requirements) { $meta.requirements } else { "" }
+    $salary       = if ($meta.salary)       { $meta.salary }       else { "Not listed" }
+    $location     = if ($meta.location)     { $meta.location }     else { "" }
+
+    if (-not (Test-Path $csvPath)) {
+      "Date,Job Title,Company,Description,Requirements,Salary,Location,URL" | Out-File -Encoding utf8 $csvPath
+    }
+
+    $csvLine = @(
+      $stamp,
+      "`"$($jobTitle -replace '"','""')`"",
+      "`"$($company -replace '"','""')`"",
+      "`"$($description -replace '"','""')`"",
+      "`"$($requirements -replace '"','""')`"",
+      "`"$($salary -replace '"','""')`"",
+      "`"$($location -replace '"','""')`"",
+      "`"$url`""
+    ) -join ","
+    $csvLine | Out-File -Encoding utf8 -Append $csvPath
+
+    Write-Host "CSV updated: $csvPath" -ForegroundColor Green
+  } catch {
+    Write-Host "CSV write failed: $($_.Exception.Message)" -ForegroundColor Red
+  }
+} else {
+  Write-Host "Agent did not create meta.json - CSV not updated." -ForegroundColor Yellow
+}

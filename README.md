@@ -1,74 +1,87 @@
-# OpenClaw Job Vault (Windows) — Part A
+# OpenClaw Job Vault
 
-**Goal (only):** Press a keyboard shortcut → OpenClaw captures the current page (PDF + snapshot + metadata) → **saves that capture bundle to a local storage folder** (outside the repo, so captures never get pushed to GitHub).
+AI agent that saves job postings as PDFs and logs them to a CSV for tracking.
 
-> Project location (everything lives here):
-`C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault`
+**The problems:** 
 
-> Storage location (where captures are kept — configurable in `save-jd.ps1`):
-`C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\OpenClaw Job Captures`
+1. Job portals store your application but not the job posting itself. Once a listing is closed or removed, the description is gone -- and you have no way to review it when you get an interview. 
 
----
+2. Students also end up manually tracking every role they applied to in spreadsheets, which nobody keeps up with.
 
-## 1) What you are building (MVP)
-
-When you press **Ctrl + Alt + J** (from anywhere):
-
-1. Auto-start the OpenClaw **gateway** and **browser** if they aren't running.
-2. Read the **currently selected tab** from the **OpenClaw-managed browser profile** (`openclaw`).
-3. Create a **bundle folder** under this repo's `captures/` (gitignored).
-4. Save:
-   - `job.pdf` (page rendered to PDF via OpenClaw)
-   - `snapshot.txt` (OpenClaw snapshot output)
-   - `page_url.txt` (URL)
-   - `meta.json` (timestamp/title/url)
-   - `cli.log` (debug output)
-5. Copy that bundle to your **local storage folder**.
-
-That's it. One shortcut, zero manual steps.
+**The solution:** Press one hotkey while you're on a job posting. The agent saves a permanent PDF copy and automatically extracts the job details (title, company, requirements, salary, location) into a CSV tracker. By the time you finish applying, everything is already stored.
 
 ---
 
-## 2) Repo layout
+## Usage
 
-Inside:
-`C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault`
+You browse jobs in Chrome. When you're on a job posting:
+
+1. Press **Ctrl + Alt + J**.
+2. Keep applying. The agent works in the background.
+3. By the time you're done, the agent has:
+   - Captured the full page (snapshot + PDF)
+   - Read the posting and extracted: job title, company, description, requirements, salary, location
+   - Saved everything to a timestamped folder
+   - Appended a row to `jobs.csv`
+
+**No switching windows. No copy-pasting into spreadsheets. Just apply and move on.**
+
+---
+
+## How it works
+
+1. Press **Ctrl + Alt + J** while on a job posting.
+2. The launcher script captures the page (snapshot + PDF) via OpenClaw CLI.
+3. The OpenClaw agent uses its `read` tool to read the snapshot, reasons about the content, and uses its `write` tool to create `meta.json` with extracted fields.
+4. The script reads the agent's output and appends a row to `jobs.csv`.
+
+The agent's behavior is defined in `agent/prompt.md`. Edit that file to change what the agent extracts or how it reasons -- no code changes needed.
+
+---
+
+## Project structure
 
 ```
 openclaw_job_vault/
+  agent/
+    prompt.md                # agent instructions (the "brain")
   scripts/
-    save-jd.ps1
-    OpenClawJobVault.ahk
-  captures/                # auto-created, gitignored — never pushed
-  README.md                # (this file)
+    save-jd.ps1              # launcher - captures page, sends to agent
+    OpenClawJobVault.ahk     # global hotkey (Ctrl+Alt+J)
+  .env.example               # template for API key
   .gitignore
+  README.md
 ```
 
-### `.gitignore`
+### Output (saved to Desktop by default)
 
 ```
-captures/
-**/cli.log
+~/Desktop/OpenClaw Job Vault/
+  jobs.csv                                       # running log of all saved jobs
+  2026-02-17_14-30-00 - Software-Engineer-Intern/
+    snapshot.txt       # page text
+    job.pdf            # page as PDF
+    page_url.txt       # original URL
+    meta.json          # agent-extracted structured data
 ```
 
 ---
 
-## 3) Prerequisites (Windows)
+## Setup
 
-### A) OpenClaw installed and working
-You must be able to run:
+### 1. Install dependencies
+
 ```bash
-openclaw browser --browser-profile openclaw status
+# OpenClaw CLI
+npm install -g openclaw@latest
+
+# AutoHotkey v2 (for the global hotkey)
+winget install AutoHotkey.AutoHotkey
 ```
 
-### B) OpenClaw browser profile enabled and usable
+### 2. Configure OpenClaw
 
-Ensure OpenClaw uses the managed `openclaw` browser profile.
-
-Config file:
-`C:\Users\boyea\.openclaw\openclaw.json` (typical on Windows)
-
-Set at minimum:
+Create or edit `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -83,304 +96,113 @@ Set at minimum:
 }
 ```
 
-> The gateway and browser are auto-started by the script when you press the hotkey. No manual commands needed.
+### 3. Add your OpenAI API key
 
-> **MVP rule:** browse jobs inside the **OpenClaw-managed browser** (orange badge) so the CLI can reliably target your active tab.
-
-### C) AutoHotkey v2
-
-Install AutoHotkey v2 so `.ahk` scripts can run.
-
----
-
-## 4) Save-JD script (PowerShell)
-
-`scripts/save-jd.ps1`
-
-```powershell
-# OpenClaw Job Vault (Windows)
-# Press Ctrl+Shift+S → auto-starts gateway/browser if needed → captures page → saves locally
-# Project root:
-# C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault
-
-$ErrorActionPreference = "Stop"
-
-# -------------------------
-# Config — change $StorageRoot to wherever you want captures saved
-# -------------------------
-$Profile    = "openclaw"
-$GatewayPort = 18789
-
-$ProjectRoot  = "C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault"
-$CapturesRoot = Join-Path $ProjectRoot "captures"
-$StorageRoot  = "C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\OpenClaw Job Vault"
-
-# Ensure captures folder exists
-New-Item -ItemType Directory -Force -Path $CapturesRoot | Out-Null
-
-# -------------------------
-# Auto-start gateway + browser if not running
-# -------------------------
-function Ensure-Gateway() {
-  $listening = netstat -an 2>$null | Select-String "127.0.0.1:$GatewayPort.*LISTENING"
-  if (-not $listening) {
-    Start-Process -FilePath "openclaw" -ArgumentList "gateway","--port",$GatewayPort -WindowStyle Hidden
-    Start-Sleep -Seconds 8
-  }
-}
-
-function Ensure-Browser() {
-  try {
-    $status = & openclaw browser --browser-profile $Profile status 2>&1
-    if ($status -match "running:\s*true") { return }
-  } catch {}
-  & openclaw browser --browser-profile $Profile start 2>$null
-  Start-Sleep -Seconds 5
-}
-
-Ensure-Gateway
-Ensure-Browser
-
-function Safe-Slug([string]$s) {
-  if ([string]::IsNullOrWhiteSpace($s)) { return "untitled" }
-  $t = $s.Trim()
-  $t = $t -replace '[\\/:*?"<>|]', ''       # invalid filename chars
-  $t = $t -replace '\s+', ' '               # normalize whitespace
-  $t = $t -replace '[^\w\s-]', ''           # remove odd symbols
-  $t = $t -replace '\s', '-'                # spaces -> dashes
-  if ($t.Length -gt 90) { $t = $t.Substring(0, 90) }
-  if ([string]::IsNullOrWhiteSpace($t)) { return "untitled" }
-  return $t
-}
-
-function Get-ActiveTab() {
-  # Both `tab --json` and `tabs --json` return {"tabs": [...]}
-  # We unwrap .tabs and pick the best candidate.
-
-  # Preferred: openclaw browser tab --json
-  try {
-    $raw = & openclaw browser --browser-profile $Profile tab --json 2>$null
-    if ($raw) {
-      $parsed = $raw | ConvertFrom-Json
-      $list = if ($parsed.tabs) { $parsed.tabs } else { @($parsed) }
-      if ($list.Count -gt 0) { return ($list | Select-Object -First 1) }
-    }
-  } catch {}
-
-  # Fallback: openclaw browser tabs --json
-  try {
-    $rawTabs = & openclaw browser --browser-profile $Profile tabs --json 2>$null
-    if (-not $rawTabs) { return $null }
-    $parsed = $rawTabs | ConvertFrom-Json
-    $tabs = if ($parsed.tabs) { $parsed.tabs } else { @($parsed) }
-
-    # Filter out blank/internal pages
-    $pages = $tabs | Where-Object { $_.url -and $_.url -ne "about:blank" -and $_.type -eq "page" }
-
-    $selected = $pages | Where-Object { $_.selected -eq $true } | Select-Object -First 1
-    if ($selected) { return $selected }
-
-    $focused = $pages | Where-Object { $_.focused -eq $true } | Select-Object -First 1
-    if ($focused) { return $focused }
-
-    if ($pages) { return ($pages | Select-Object -First 1) }
-
-    return ($tabs | Select-Object -First 1)
-  } catch {}
-
-  return $null
-}
-
-# -------------------------
-# Capture
-# -------------------------
-$stamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-
-$tab = Get-ActiveTab
-if (-not $tab) {
-  Write-Host "❌ Could not read active tab from OpenClaw." -ForegroundColor Red
-  Write-Host "Make sure the OpenClaw browser is running:" -ForegroundColor Yellow
-  Write-Host "openclaw browser --browser-profile openclaw start" -ForegroundColor Yellow
-  exit 1
-}
-
-# Field names vary by build; try common ones
-$url = $tab.url
-if (-not $url) { $url = $tab.href }
-if (-not $url) { $url = $tab.location }
-
-$title = $tab.title
-if (-not $title) { $title = $tab.name }
-if (-not $title) { $title = "Untitled" }
-
-$slug = Safe-Slug $title
-$bundleDirName = "$stamp - $slug"
-$bundleDir = Join-Path $CapturesRoot $bundleDirName
-New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
-
-$logPath = Join-Path $bundleDir "cli.log"
-"[$(Get-Date -Format o)] Save JD start" | Out-File -Encoding utf8 $logPath
-
-# Save URL
-$pageUrlPath = Join-Path $bundleDir "page_url.txt"
-$url | Out-File -Encoding utf8 $pageUrlPath
-"URL: $url" | Out-File -Encoding utf8 -Append $logPath
-
-# Snapshot
-$snapshotPath = Join-Path $bundleDir "snapshot.txt"
-try {
-  $snapOut = & openclaw browser --browser-profile $Profile snapshot --format ai 2>&1
-  $snapOut | Out-File -Encoding utf8 $snapshotPath
-  "Snapshot: OK" | Out-File -Encoding utf8 -Append $logPath
-} catch {
-  "Snapshot: FAIL - $($_.Exception.Message)" | Out-File -Encoding utf8 -Append $logPath
-}
-
-# PDF
-$pdfFinalPath = Join-Path $bundleDir "job.pdf"
-try {
-  $pdfOut = & openclaw browser --browser-profile $Profile pdf 2>&1
-  $pdfOut | Out-File -Encoding utf8 -Append $logPath
-
-  # Many builds output: PDF:<path>
-  $m = [regex]::Match($pdfOut, "PDF:(.+)$", "Multiline")
-  if ($m.Success) {
-    $pdfTempPath = $m.Groups[1].Value.Trim()
-    if (Test-Path $pdfTempPath) {
-      Copy-Item $pdfTempPath $pdfFinalPath -Force
-      "PDF: OK ($pdfTempPath)" | Out-File -Encoding utf8 -Append $logPath
-    } else {
-      "PDF: FAIL - temp path not found: $pdfTempPath" | Out-File -Encoding utf8 -Append $logPath
-    }
-  } else {
-    "PDF: FAIL - could not parse PDF path from output" | Out-File -Encoding utf8 -Append $logPath
-  }
-} catch {
-  "PDF: FAIL - $($_.Exception.Message)" | Out-File -Encoding utf8 -Append $logPath
-}
-
-# Metadata
-$metaPath = Join-Path $bundleDir "meta.json"
-$meta = @{
-  saved_at = (Get-Date).ToString("o")
-  profile  = $Profile
-  title    = $title
-  url      = $url
-  bundle_dir = $bundleDir
-}
-$meta | ConvertTo-Json -Depth 6 | Out-File -Encoding utf8 $metaPath
-"Meta: OK" | Out-File -Encoding utf8 -Append $logPath
-
-# -------------------------
-# Copy bundle to local storage folder
-# -------------------------
-try {
-  New-Item -ItemType Directory -Force -Path $StorageRoot | Out-Null
-  $storageDest = Join-Path $StorageRoot $bundleDirName
-  "Copy: START -> $storageDest" | Out-File -Encoding utf8 -Append $logPath
-
-  Copy-Item -Path $bundleDir -Destination $storageDest -Recurse -Force
-  "Copy: OK" | Out-File -Encoding utf8 -Append $logPath
-
-  Write-Host ""
-  Write-Host "✅ Saved Job Vault bundle" -ForegroundColor Green
-  Write-Host "Repo:    $bundleDir"
-  Write-Host "Storage: $storageDest"
-  Write-Host ""
-} catch {
-  "Copy: FAIL - $($_.Exception.Message)" | Out-File -Encoding utf8 -Append $logPath
-  Write-Host ""
-  Write-Host "⚠️ Capture saved in repo but copy to storage failed." -ForegroundColor Yellow
-  Write-Host "Repo: $bundleDir"
-  Write-Host "Check: $logPath"
-  Write-Host ""
-  exit 2
-}
+```bash
+cp .env.example .env
 ```
 
----
+Edit `.env` and paste your key:
 
-## 5) Hotkey binding (Windows) — AutoHotkey v2
-
-`scripts/OpenClawJobVault.ahk`
-
-```ahk
-; OpenClaw Job Vault Hotkey (AutoHotkey v2)
-; Ctrl+Alt+J -> capture current page (J = Job)
-; Auto-installs to Windows Startup so it runs on login.
-
-#Requires AutoHotkey v2.0
-
-; --- Auto-add to Startup folder (runs once, harmless if already there) ---
-startupDir := A_Startup
-shortcutPath := startupDir "\OpenClawJobVault.lnk"
-if !FileExist(shortcutPath) {
-  shell := ComObject("WScript.Shell")
-  link := shell.CreateShortcut(shortcutPath)
-  link.TargetPath := A_ScriptFullPath
-  link.WorkingDirectory := A_ScriptDir
-  link.Description := "OpenClaw Job Vault Hotkey"
-  link.Save()
-}
-
-; --- Hotkey: Ctrl+Alt+J ---
-^!j:: {
-  ps1 := "C:\Users\boyea\OneDrive - Milwaukee School of Engineering\Desktop\openclaw_job_vault\scripts\save-jd.ps1"
-  Run 'powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "' ps1 '"'
-}
+```
+OPENAI_API_KEY=sk-your-actual-key
 ```
 
-**One-time setup:** Double-click `OpenClawJobVault.ahk` once. It will auto-add itself to Windows Startup so the hotkey is always available after login.
+Get a key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). The agent uses GPT-4o for reasoning.
+
+### 4. Set up the hotkey
+
+Double-click `scripts/OpenClawJobVault.ahk`. It auto-adds itself to Windows Startup so the hotkey is always available after login.
+
+### 5. (Optional) Change the storage folder
+
+By default, captures are saved to `~/Desktop/OpenClaw Job Vault/`. To change this, edit the `$StorageRoot` variable near the top of `scripts/save-jd.ps1`.
 
 ---
 
-## 6) How to use (daily flow)
+## Usage
 
-1. Browse job postings in the OpenClaw browser (orange badge).
-2. Press **Ctrl + Alt + J**.
-3. Done. The gateway and browser auto-start if needed.
-
-Results appear in:
-
-* Repo bundle (gitignored):
-  `...\openclaw_job_vault\captures\YYYY-MM-DD_HH-mm-ss - <title>\`
-* Storage copy:
-  `...\Desktop\OpenClaw Job Vault\<same folder name>\`
+1. Browse jobs in Chrome (the OpenClaw browser auto-starts on first use).
+2. Find a posting, start applying.
+3. Press **Ctrl + Alt + J** while you're on the page.
+4. Keep applying -- the agent captures and extracts in the background.
+5. When you're done for the day, open `jobs.csv` to see everything you saved.
 
 ---
 
-## 7) Quick tests (do these once)
+## Testing
 
-### Test A — OpenClaw capture works
+### Verify OpenClaw works
 
 ```bash
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
-openclaw browser --browser-profile openclaw pdf
 openclaw browser --browser-profile openclaw snapshot --format ai
 ```
 
-### Test B — Full end-to-end
+### Verify the agent works
 
-Open a page in the OpenClaw browser and run:
+```bash
+openclaw agent --agent main --local --message "Reply with: hello" --timeout 30
+```
+
+### Full end-to-end test
+
+Open a job posting in the OpenClaw browser, then:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\scripts\save-jd.ps1"
 ```
 
-Check that:
-* A bundle folder appears under `captures/`
-* The same folder appears under `Desktop\OpenClaw Job Vault\`
+Check that a bundle folder and `jobs.csv` appear in the storage folder.
 
 ---
 
-## 8) Definition of Done (this project)
+## Architecture
 
-Pressing **Ctrl + Alt + J** creates a bundle in:
-`...\openclaw_job_vault\captures\...`
-and copies that same bundle to:
-`...\Desktop\OpenClaw Job Vault\...`
+```
+Ctrl+Alt+J
+    |
+    v
+save-jd.ps1 (launcher)
+    |-- ensures gateway + browser are running
+    |-- identifies active browser tab
+    |-- captures snapshot + PDF via OpenClaw CLI
+    |-- sends snapshot path to OpenClaw agent
+    |
+    v
+OpenClaw Agent (GPT-4o)
+    |-- reads snapshot using `read` tool
+    |-- reasons about content
+    |-- extracts structured fields
+    |-- writes meta.json using `write` tool
+    |
+    v
+save-jd.ps1 (continued)
+    |-- reads agent's meta.json
+    |-- appends row to jobs.csv
+    |-- done
+```
 
-Captures never get pushed to GitHub (gitignored).
+The agent's behavior is defined in `agent/prompt.md`. Edit that file to change what the agent extracts or how it reasons -- no code changes needed.
 
-No other goals in scope.
+---
+
+## CSV columns
+
+| Column | Description |
+|---|---|
+| Date | Timestamp (YYYY-MM-DD_HH-mm-ss) |
+| Job Title | Position name |
+| Company | Employer |
+| Description | 2-3 sentence summary |
+| Requirements | Key qualifications (comma-separated) |
+| Salary | Compensation or "Not listed" |
+| Location | City/state, remote, hybrid |
+| URL | Original job posting link |
+
+---
+
+## License
+
+MIT
