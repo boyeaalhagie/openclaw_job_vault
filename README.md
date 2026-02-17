@@ -1,6 +1,7 @@
 <p align="center">
   <img src="openclaw_job_vault.png" alt="OpenClaw Job Vault" width="400">
 </p>
+Read more here -- https://boyealhagie.com/projects/openclaw-job-vault
 
 # OpenClaw Job Vault
 
