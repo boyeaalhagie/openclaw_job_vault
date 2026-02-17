@@ -120,15 +120,6 @@ By default, captures are saved to `~/Desktop/OpenClaw Job Vault/`. To change thi
 
 ---
 
-## Usage
-
-1. Browse jobs in Chrome (the OpenClaw browser auto-starts on first use).
-2. Find a posting, start applying.
-3. Press **Ctrl + Alt + J** while you're on the page.
-4. Keep applying -- the agent captures and extracts in the background.
-5. When you're done for the day, open `jobs.csv` to see everything you saved.
-
----
 
 ## Testing
 
@@ -205,4 +196,10 @@ The agent's behavior is defined in `agent/prompt.md`. Edit that file to change w
 
 ## License
 
-MIT
+MIT. Do whatever you want with it.
+
+## Acknowledgments
+
+- [OpenClaw](https://github.com/openclaw-ai/openclaw) for the OpenClaw CLI and agent.
+- [AutoHotkey](https://www.autohotkey.com/) for the AutoHotkey script.
+- [GPT-4o](https://openai.com/gpt-4o/) for the OpenAI API.
