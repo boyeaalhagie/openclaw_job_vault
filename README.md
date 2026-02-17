@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="openclaw_job_vault.png" alt="OpenClaw Job Vault" width="600">
+</p>
+
 # OpenClaw Job Vault
 
 AI agent that saves job postings as PDFs and logs them to a CSV for tracking.
